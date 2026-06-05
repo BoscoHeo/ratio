@@ -159,6 +159,45 @@ export const updateRoomPassword = async (code: string, newPassword: string) => {
   }
 };
 
+export const getRoomCodeVariations = (code: string): string[] => {
+  const clean = code.trim().toLowerCase();
+  const variations = new Set<string>();
+  variations.add(clean);
+  variations.add(clean.replace(/\s+/g, '')); // No spaces anywhere
+
+  // Handle Korean/alphabetic character followed by digits boundary: "청곡61" -> "청곡 61"
+  const match = clean.match(/^([가-힣a-zA-Z]+)(\d+)$/);
+  if (match) {
+    variations.add(`${match[1]} ${match[2]}`);
+  }
+
+  // Handle spaces between Korean/alphabetic characters and digits: "청곡 61" -> "청곡61"
+  const matchedSpace = clean.match(/^([가-힣a-zA-Z]+)\s+(\d+)$/);
+  if (matchedSpace) {
+    variations.add(`${matchedSpace[1]}${matchedSpace[2]}`);
+  }
+
+  return Array.from(variations);
+};
+
+export const resolveRoomCode = async (enteredCode: string): Promise<string> => {
+  if (!enteredCode) return '';
+  const variations = getRoomCodeVariations(enteredCode);
+  
+  // Check variations in parallel for existence
+  const checks = await Promise.all(
+    variations.map(async (v) => {
+      const roomRef = doc(db, 'rooms', v);
+      const snap = await getDoc(roomRef);
+      return snap.exists() ? v : null;
+    })
+  );
+  
+  // Return the first that exists in DB, or the default trimmed lowercase variation if none
+  const matched = checks.find((v) => v !== null);
+  return matched || variations[0];
+};
+
 export const checkRoomPassword = async (code: string, passwordEntered: string): Promise<boolean> => {
   const path = `rooms/${code}`;
   try {
