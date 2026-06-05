@@ -41,6 +41,7 @@
       "properties": {
         "code": { "type": "string" },
         "teacher": { "type": "string" },
+        "password": { "type": "string" },
         "createdAt": { "type": "string", "format": "date-time" }
       },
       "required": ["code", "teacher", "createdAt"]

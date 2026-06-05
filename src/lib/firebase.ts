@@ -134,17 +134,33 @@ export const getLeaderboard = async (gameMode: 'single' | 'group' | 'versus', ro
   }
 };
 
-export const createRoom = async (code: string, teacher: string) => {
+export const createRoom = async (code: string, teacher: string, password?: string) => {
   const path = `rooms/${code}`;
   try {
     const roomRef = doc(db, 'rooms', code);
     await setDoc(roomRef, {
       code,
       teacher,
+      password: password || '',
       createdAt: serverTimestamp()
     });
   } catch (error) {
     handleFirestoreError(error, OperationType.WRITE, path);
+  }
+};
+
+export const checkRoomPassword = async (code: string, passwordEntered: string): Promise<boolean> => {
+  const path = `rooms/${code}`;
+  try {
+    const roomRef = doc(db, 'rooms', code);
+    const snap = await getDoc(roomRef);
+    if (!snap.exists()) return false;
+    const data = snap.data();
+    const actualPassword = data?.password || '1234';
+    return actualPassword === passwordEntered;
+  } catch (error) {
+    handleFirestoreError(error, OperationType.GET, path);
+    return false;
   }
 };
 

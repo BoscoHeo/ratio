@@ -48,6 +48,7 @@ import {
   getLeaderboard, 
   createRoom, 
   checkRoomExists,
+  checkRoomPassword,
   syncPlayerProgress,
   subscribeRoomLeaderboard,
   deleteScore,
@@ -157,6 +158,8 @@ export default function App() {
   const [deletingId, setDeletingId] = useState<string | null>(null);
   const [enteredPassword, setEnteredPassword] = useState('');
   const [hasUploaded, setHasUploaded] = useState(false);
+  const [roomPassword, setRoomPassword] = useState(''); // for room creation
+  const [enteredRoomPassword, setEnteredRoomPassword] = useState(''); // for viewing existing room
   
   // Dungeon specific state
   const [playerHp, setPlayerHp] = useState(100);
@@ -262,6 +265,8 @@ export default function App() {
     setCurrentScoreId(null);
     setHasUploaded(false);
     setEnteredPassword('');
+    setRoomPassword('');
+    setEnteredRoomPassword('');
   }, []);
 
   const handleTeacherAuth = () => {
@@ -430,22 +435,33 @@ export default function App() {
     }
     
     setIsSaving(true);
-    setRoomToView(teacherRoomCode);
-    setScreen('teacher-dashboard');
-    setLeaderboards([]); 
-
     try {
-      await createRoom(teacherRoomCode, teacherName);
+      const exists = await checkRoomExists(teacherRoomCode);
+      if (exists) {
+        const isCorrectPassword = await checkRoomPassword(teacherRoomCode, roomPassword);
+        if (!isCorrectPassword) {
+          alert('이미 존재하는 방 코드이지만, 입력하신 비밀번호가 올바르지 않습니다. 다른 방 코드를 사용하시거나 올바른 비밀번호를 입력해주세요.');
+          setIsSaving(false);
+          return;
+        }
+        alert('기존 방 비밀번호가 일치하여 대시보드에 정상 진입합니다.');
+      } else {
+        await createRoom(teacherRoomCode, teacherName, roomPassword);
+        alert(`🎉 [${teacherRoomCode}] 던전 상황실이 생성되었습니다! 설정하신 비밀번호는 추후 상황실 진입 및 데이터 조회 시 필요합니다.`);
+      }
+
+      setRoomToView(teacherRoomCode);
+      setLeaderboards([]); 
       const results = await getLeaderboard('single', teacherRoomCode);
       setLeaderboards(results);
+      setScreen('teacher-dashboard');
     } catch (err) {
       console.error("Room creation error:", err);
-      // Even if it fails, we are already on the dashboard, 
-      // but maybe show an error there or go back.
+      alert('방 개설/진입 중 오류가 발생했습니다.');
     } finally {
       setIsSaving(false);
     }
-  }, [teacherRoomCode, teacherName]);
+  }, [teacherRoomCode, teacherName, roomPassword]);
 
   const handleJoinRoom = useCallback(async () => {
     if (!studentRoomCode.trim()) {
@@ -474,18 +490,36 @@ export default function App() {
   }, [studentRoomCode]);
 
   const viewRoomData = useCallback(async () => {
-    if (!roomToView.trim()) return;
+    if (!roomToView.trim()) {
+      alert('조회할 방 코드를 입력해주세요.');
+      return;
+    }
     setIsSaving(true);
     try {
+      const exists = await checkRoomExists(roomToView);
+      if (!exists) {
+        alert('존재하지 않는 방 코드입니다.');
+        setIsSaving(false);
+        return;
+      }
+
+      const isCorrectPassword = await checkRoomPassword(roomToView, enteredRoomPassword);
+      if (!isCorrectPassword) {
+        alert('방 비밀번호가 올바르지 않습니다.');
+        setIsSaving(false);
+        return;
+      }
+
       const results = await getLeaderboard('single', roomToView);
       setLeaderboards(results);
       setScreen('teacher-dashboard');
     } catch (err) {
       console.error("View room error:", err);
+      alert('방 데이터 조회 중 오류가 발생했습니다.');
     } finally {
       setIsSaving(false);
     }
-  }, [roomToView]);
+  }, [roomToView, enteredRoomPassword]);
 
   return (
     <div className="min-h-screen flex items-center justify-center p-4">
@@ -1199,6 +1233,13 @@ export default function App() {
                       onChange={(e) => setTeacherRoomCode(e.target.value)}
                       className="w-full bg-slate-900 p-3 rounded-lg border border-slate-700 text-white font-mono font-bold"
                     />
+                    <input 
+                      type="password"
+                      placeholder="이 방의 진입 비밀번호 설정 (선택, 기본 1234)"
+                      value={roomPassword}
+                      onChange={(e) => setRoomPassword(e.target.value)}
+                      className="w-full bg-slate-900 p-3 rounded-lg border border-slate-700 text-white font-mono"
+                    />
                     <button 
                       onClick={handleCreateRoom} 
                       disabled={isSaving}
@@ -1211,14 +1252,30 @@ export default function App() {
 
                 <div className="dungeon-panel border-slate-600">
                   <h3 className="text-slate-400 text-xs font-black uppercase mb-4 tracking-widest">기존 방 데이터 조회</h3>
-                  <div className="flex gap-2">
+                  <div className="space-y-3">
                     <input 
                       placeholder="조회할 방 코드"
                       value={roomToView}
                       onChange={(e) => setRoomToView(e.target.value)}
-                      className="flex-1 bg-slate-900 p-3 rounded-lg border border-slate-700 text-white font-mono"
+                      className="w-full bg-slate-900 p-3 rounded-lg border border-slate-700 text-white font-mono font-bold"
                     />
-                    <button onClick={viewRoomData} className="bg-slate-700 px-4 py-2 rounded-lg font-bold">조회</button>
+                    <input 
+                      type="password"
+                      placeholder="해당 방의 비밀번호"
+                      value={enteredRoomPassword}
+                      onChange={(e) => setEnteredRoomPassword(e.target.value)}
+                      onKeyDown={(e) => {
+                        if (e.key === 'Enter') viewRoomData();
+                      }}
+                      className="w-full bg-slate-900 p-3 rounded-lg border border-slate-700 text-white font-mono"
+                    />
+                    <button 
+                      onClick={viewRoomData} 
+                      disabled={isSaving}
+                      className="w-full btn-secondary py-3 text-sm font-black uppercase border-slate-700 text-slate-300 hover:text-white"
+                    >
+                      {isSaving ? '조회 중...' : '상황실 조회 및 진입'}
+                    </button>
                   </div>
                 </div>
               </div>

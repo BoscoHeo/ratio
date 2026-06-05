@@ -34,6 +34,7 @@ export interface ScoreEntry {
 export interface Room {
   code: string;
   teacher: string;
+  password?: string;
   createdAt: any;
 }
 

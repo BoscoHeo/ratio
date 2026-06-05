@@ -39,7 +39,9 @@ service cloud.firestore {
     // Rooms collection
     match /rooms/{roomCode} {
       allow get: if true;
-      allow create, update: if (incoming().code == roomCode || request.resource.data.code == roomCode) && incoming().teacher is string;
+      allow create, update: if (incoming().code == roomCode || request.resource.data.code == roomCode) && 
+                              incoming().teacher is string &&
+                              (!incoming().keys().contains('password') || incoming().password is string);
       allow list, delete: if false;
     }
   }
