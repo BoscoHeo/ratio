@@ -452,16 +452,17 @@ export default function App() {
   };
 
   const handleCreateRoom = useCallback(async () => {
-    if (!teacherRoomCode.trim() || !teacherName.trim()) {
+    const normalizedCode = teacherRoomCode.trim().toLowerCase();
+    if (!normalizedCode || !teacherName.trim()) {
       alert('선생님 성함과 생성할 방 코드를 모두 입력해주세요.');
       return;
     }
     
     setIsSaving(true);
     try {
-      const exists = await checkRoomExists(teacherRoomCode);
+      const exists = await checkRoomExists(normalizedCode);
       if (exists) {
-        const isCorrectPassword = await checkRoomPassword(teacherRoomCode, roomPassword);
+        const isCorrectPassword = await checkRoomPassword(normalizedCode, roomPassword);
         if (!isCorrectPassword) {
           alert('이미 존재하는 방 코드이지만, 입력하신 비밀번호가 올바르지 않습니다. 다른 방 코드를 사용하시거나 올바른 비밀번호를 입력해주세요.');
           setIsSaving(false);
@@ -469,13 +470,13 @@ export default function App() {
         }
         alert('기존 방 비밀번호가 일치하여 대시보드에 정상 진입합니다.');
       } else {
-        await createRoom(teacherRoomCode, teacherName, roomPassword);
-        alert(`🎉 [${teacherRoomCode}] 던전 상황실이 생성되었습니다! 설정하신 비밀번호는 추후 상황실 진입 및 데이터 조회 시 필요합니다.`);
+        await createRoom(normalizedCode, teacherName, roomPassword);
+        alert(`🎉 [${normalizedCode}] 던전 상황실이 생성되었습니다! 설정하신 비밀번호는 추후 상황실 진입 및 데이터 조회 시 필요합니다.`);
       }
 
-      setRoomToView(teacherRoomCode);
+      setRoomToView(normalizedCode);
       setLeaderboards([]); 
-      const results = await getLeaderboard('single', teacherRoomCode);
+      const results = await getLeaderboard('single', normalizedCode);
       setLeaderboards(results);
       setScreen('teacher-dashboard');
     } catch (err) {
@@ -487,20 +488,21 @@ export default function App() {
   }, [teacherRoomCode, teacherName, roomPassword]);
 
   const handleJoinRoom = useCallback(async () => {
-    if (!studentRoomCode.trim()) {
+    const normalizedCode = studentRoomCode.trim().toLowerCase();
+    if (!normalizedCode) {
       alert('입력된 방 코드가 없습니다.');
       return;
     }
     setIsSaving(true);
     try {
-      const exists = await checkRoomExists(studentRoomCode);
+      const exists = await checkRoomExists(normalizedCode);
       if (exists) {
-        setActiveRoom(studentRoomCode);
-        setRoomToView(studentRoomCode);
+        setActiveRoom(normalizedCode);
+        setRoomToView(normalizedCode);
         setScreen('student-lobby');
         // Generate currentScoreId immediately upon joining the room
         setCurrentScoreId(generateId());
-        alert(`🎉 ${studentRoomCode} 던전(학습방)에 연결되었습니다! 이름을 정하고 퀘스트를 도전하세요!`);
+        alert(`🎉 ${normalizedCode} 던전(학습방)에 연결되었습니다! 이름을 정하고 퀘스트를 도전하세요!`);
       } else {
         alert('해당 방 코드를 찾을 수 없습니다. 코드를 다시 확인해주세요.');
       }
@@ -513,27 +515,28 @@ export default function App() {
   }, [studentRoomCode]);
 
   const viewRoomData = useCallback(async () => {
-    if (!roomToView.trim()) {
+    const normalizedCode = roomToView.trim().toLowerCase();
+    if (!normalizedCode) {
       alert('조회할 방 코드를 입력해주세요.');
       return;
     }
     setIsSaving(true);
     try {
-      const exists = await checkRoomExists(roomToView);
+      const exists = await checkRoomExists(normalizedCode);
       if (!exists) {
         alert('존재하지 않는 방 코드입니다.');
         setIsSaving(false);
         return;
       }
 
-      const isCorrectPassword = await checkRoomPassword(roomToView, enteredRoomPassword);
+      const isCorrectPassword = await checkRoomPassword(normalizedCode, enteredRoomPassword);
       if (!isCorrectPassword) {
         alert('방 비밀번호가 올바르지 않습니다.');
         setIsSaving(false);
         return;
       }
 
-      const results = await getLeaderboard('single', roomToView);
+      const results = await getLeaderboard('single', normalizedCode);
       setLeaderboards(results);
       setScreen('teacher-dashboard');
     } catch (err) {
