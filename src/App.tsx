@@ -34,6 +34,7 @@ import {
   Copy,
   Trash2
 } from 'lucide-react';
+import { doc, onSnapshot } from 'firebase/firestore';
 import { 
   Question, 
   GameMode, 
@@ -49,7 +50,9 @@ import {
   checkRoomExists,
   syncPlayerProgress,
   subscribeRoomLeaderboard,
-  deleteScore
+  deleteScore,
+  deleteAllScoresInRoom,
+  db
 } from './lib/firebase';
 
 // Helper to shuffle array
@@ -152,6 +155,8 @@ export default function App() {
   const [roomToView, setRoomToView] = useState('');
   const [currentScoreId, setCurrentScoreId] = useState<string | null>(null);
   const [deletingId, setDeletingId] = useState<string | null>(null);
+  const [enteredPassword, setEnteredPassword] = useState('');
+  const [hasUploaded, setHasUploaded] = useState(false);
   
   // Dungeon specific state
   const [playerHp, setPlayerHp] = useState(100);
@@ -206,6 +211,7 @@ export default function App() {
             mode,
             roomCode: activeRoom
           });
+          setHasUploaded(true);
           console.log("Real-time score sync completed:", scoreVal);
         } catch (e) {
           console.error("Real-time score sync failed:", e);
@@ -215,6 +221,25 @@ export default function App() {
       return () => clearTimeout(timer);
     }
   }, [screen, activeRoom, currentScoreId, playerName, singleScore, playerScores, mode, stats.level, totalGroupScore]);
+
+  // Listen to current score document to detect if teacher deleted it
+  useEffect(() => {
+    if (activeRoom && currentScoreId && hasUploaded && (screen === 'student-lobby' || screen === 'game' || screen === 'result')) {
+      const docRef = doc(db, 'leaderboard', currentScoreId);
+      const unsubscribe = onSnapshot(docRef, (snap) => {
+        if (!snap.exists()) {
+          setActiveRoom(null);
+          setCurrentScoreId(null);
+          setHasUploaded(false);
+          alert('선생님이 대시보드에서 기록을 삭제하여 연결이 해제되었습니다.');
+          setScreen('main');
+        }
+      }, (err) => {
+        console.error("Error listening to score document:", err);
+      });
+      return () => unsubscribe();
+    }
+  }, [activeRoom, currentScoreId, hasUploaded, screen]);
 
   // Synchronize teacher classroom dashboard in real-time
   useEffect(() => {
@@ -235,7 +260,18 @@ export default function App() {
     // Keep name cached for seamless replay experiences
     setPlayerHp(100);
     setCurrentScoreId(null);
+    setHasUploaded(false);
+    setEnteredPassword('');
   }, []);
+
+  const handleTeacherAuth = () => {
+    if (enteredPassword === '1234') {
+      setScreen('teacher');
+      setEnteredPassword('');
+    } else {
+      alert('비밀번호가 올바르지 않습니다.');
+    }
+  };
 
   const openRanking = async () => {
     setScreen('ranking');
@@ -515,7 +551,7 @@ export default function App() {
                   <div className="text-xs font-medium opacity-70">실력 겨루기</div>
                 </button>
                 <button 
-                  onClick={() => setScreen('teacher')}
+                  onClick={() => setScreen('teacher-auth')}
                   className="btn-secondary bg-purple-600 border-purple-700 shadow-purple-900/20 group flex flex-col items-center gap-4 p-8 sm:col-span-1"
                 >
                   <GraduationCap size={32} />
@@ -1088,6 +1124,52 @@ export default function App() {
             </motion.div>
           )}
 
+          {screen === 'teacher-auth' && (
+            <motion.div
+              key="teacher-auth"
+              initial={{ opacity: 0, scale: 0.9 }}
+              animate={{ opacity: 1, scale: 1 }}
+              exit={{ opacity: 0, scale: 0.9 }}
+              className="card max-w-md mx-auto text-center"
+            >
+              <button onClick={goMain} className="mb-8 flex items-center gap-2 text-slate-400 hover:text-white transition-colors font-bold uppercase text-xs">
+                <ArrowLeft size={16} /> Back
+              </button>
+
+              <div className="w-16 h-16 bg-purple-600/10 text-purple-400 rounded-2xl flex items-center justify-center mx-auto mb-6 border-2 border-purple-500/30 shadow-[0_0_20px_rgba(147,51,234,0.1)]">
+                <GraduationCap size={32} />
+              </div>
+
+              <h2 className="text-3xl font-black text-white mb-2 tracking-tighter">교사 암호 확인</h2>
+              <p className="text-slate-400 text-sm font-bold mb-8">교사 스테이션에 진입하려면 암호가 필요합니다.</p>
+
+              <div className="dungeon-panel border-purple-500/30 mb-8 text-left">
+                <label className="block text-[10px] font-black text-purple-400 uppercase tracking-widest mb-3">비밀번호 입력</label>
+                <input 
+                  type="password"
+                  value={enteredPassword}
+                  onChange={(e) => setEnteredPassword(e.target.value)}
+                  onKeyDown={(e) => {
+                    if (e.key === 'Enter') handleTeacherAuth();
+                  }}
+                  placeholder="암호를 입력하세요..."
+                  className="w-full bg-slate-900 p-4 rounded-xl border-2 border-slate-700 outline-none focus:border-purple-500 transition-all text-lg font-mono text-center tracking-widest text-white placeholder-slate-600"
+                  autoFocus
+                />
+                <div className="text-[10px] text-slate-500 font-bold mt-2 text-center">
+                  * 초기 기본 암호는 <span className="text-purple-400 font-black font-mono">1234</span> 입니다.
+                </div>
+              </div>
+
+              <button 
+                onClick={handleTeacherAuth}
+                className="w-full btn-primary bg-purple-600 border-purple-700 py-4 text-lg font-black uppercase tracking-widest hover:brightness-110 active:scale-95 transition-all shadow-lg shadow-purple-900/20 font-sans"
+              >
+                인증 및 진입
+              </button>
+            </motion.div>
+          )}
+
           {screen === 'teacher' && (
             <motion.div 
               key="teacher" 
@@ -1180,6 +1262,33 @@ export default function App() {
                 >
                   <RefreshCcw size={18} />
                 </button>
+              </div>
+
+              <div className="flex justify-between items-center mb-4 px-1">
+                <span className="text-xs font-bold text-slate-400">참여 영웅: <span className="text-purple-400 font-extrabold">{leaderboard.length}명</span></span>
+                {leaderboard.length > 0 && (
+                  <button
+                    onClick={async () => {
+                      if (confirm('정말로 이 상황실의 모든 학생 데이터(기록)를 삭제하시겠습니까? 이 작업은 되돌릴 수 없으며, 모든 연결된 학생용 대시보드가 초기화됩니다.')) {
+                        try {
+                          setIsSaving(true);
+                          await deleteAllScoresInRoom(roomToView);
+                          setLeaderboards([]);
+                          alert('모든 학생 데이터가 초기화되었습니다.');
+                        } catch (error) {
+                          alert('전체 삭제에 실패했습니다.');
+                        } finally {
+                          setIsSaving(false);
+                        }
+                      }
+                    }}
+                    disabled={isSaving}
+                    className="text-xs bg-red-600/20 text-red-400 hover:bg-red-600 hover:text-white px-3 py-1.5 rounded-lg border border-red-500/20 hover:border-red-600 transition-all font-bold flex items-center gap-1.5"
+                  >
+                    <Trash2 size={12} />
+                    학생 전체 삭제
+                  </button>
+                )}
               </div>
 
               <div className="flex-1 overflow-y-auto space-y-3 pr-2 custom-scrollbar">

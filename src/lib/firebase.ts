@@ -215,3 +215,15 @@ export const subscribeRoomLeaderboard = (
     handleFirestoreError(error, OperationType.GET, path);
   });
 };
+
+export const deleteAllScoresInRoom = async (roomCode: string) => {
+  const path = 'leaderboard';
+  try {
+    const q = query(collection(db, 'leaderboard'), where('roomCode', '==', roomCode));
+    const snap = await getDocs(q);
+    const deletePromises = snap.docs.map(docSnapshot => deleteDoc(docSnapshot.ref));
+    await Promise.all(deletePromises);
+  } catch (error) {
+    handleFirestoreError(error, OperationType.DELETE, path);
+  }
+};
