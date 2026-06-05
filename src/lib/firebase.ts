@@ -99,9 +99,10 @@ export const getLeaderboard = async (gameMode: 'single' | 'group' | 'versus', ro
   try {
     let q;
     if (roomCode) {
+      const roomVariations = getRoomCodeVariations(roomCode);
       q = query(
         collection(db, path),
-        where('roomCode', '==', roomCode),
+        where('roomCode', 'in', roomVariations),
         limit(maxResults * 2)
       );
     } else {
@@ -160,42 +161,69 @@ export const updateRoomPassword = async (code: string, newPassword: string) => {
 };
 
 export const getRoomCodeVariations = (code: string): string[] => {
-  const clean = code.trim().toLowerCase();
+  const clean = (code || '').trim().toLowerCase().replace(/[/\\?#]/g, ''); // Strip any path structure symbols to avoid invalid segment count crashes
+  if (!clean) return [];
   const variations = new Set<string>();
+  
+  // 1. Base input
   variations.add(clean);
-  variations.add(clean.replace(/\s+/g, '')); // No spaces anywhere
+  
+  // 2. Remove all spaces
+  const noSpace = clean.replace(/\s+/g, '');
+  variations.add(noSpace);
+  
+  // 3. Remove all spaces and hyphens
+  const noSpaceNoHyphen = clean.replace(/[\s-]+/g, '');
+  variations.add(noSpaceNoHyphen);
 
-  // Handle Korean/alphabetic character followed by digits boundary: "청곡61" -> "청곡 61"
-  const match = clean.match(/^([가-힣a-zA-Z]+)(\d+)$/);
+  // 4. Generate variants for alphanumeric boundaries (e.g. "청곡61" <-> "청곡 61" <-> "청곡6-1" <-> "청곡 6-1")
+  const match = noSpace.match(/^([가-힣a-zA-Z0-9_]+?)[-]?(\d+)(?:[-]?(\d+))?$/);
   if (match) {
-    variations.add(`${match[1]} ${match[2]}`);
+    const textPart = match[1];
+    const num1 = match[2];
+    const num2 = match[3] || '';
+
+    if (!num2) {
+      variations.add(`${textPart}${num1}`);
+      variations.add(`${textPart} ${num1}`);
+    } else {
+      variations.add(`${textPart}${num1}-${num2}`);
+      variations.add(`${textPart} ${num1}-${num2}`);
+      variations.add(`${textPart}${num1}${num2}`);
+      variations.add(`${textPart} ${num1}${num2}`);
+    }
   }
 
-  // Handle spaces between Korean/alphabetic characters and digits: "청곡 61" -> "청곡61"
-  const matchedSpace = clean.match(/^([가-힣a-zA-Z]+)\s+(\d+)$/);
-  if (matchedSpace) {
-    variations.add(`${matchedSpace[1]}${matchedSpace[2]}`);
-  }
-
-  return Array.from(variations);
+  return Array.from(variations).filter(Boolean);
 };
 
 export const resolveRoomCode = async (enteredCode: string): Promise<string> => {
   if (!enteredCode) return '';
   const variations = getRoomCodeVariations(enteredCode);
+  if (variations.length === 0) return '';
   
-  // Check variations in parallel for existence
-  const checks = await Promise.all(
-    variations.map(async (v) => {
-      const roomRef = doc(db, 'rooms', v);
-      const snap = await getDoc(roomRef);
-      return snap.exists() ? v : null;
-    })
-  );
-  
-  // Return the first that exists in DB, or the default trimmed lowercase variation if none
-  const matched = checks.find((v) => v !== null);
-  return matched || variations[0];
+  try {
+    // Check variations in parallel for existence with isolated try-catch blocks to prevent any crashes
+    const checks = await Promise.all(
+      variations.map(async (v) => {
+        try {
+          const roomRef = doc(db, 'rooms', v);
+          const snap = await getDoc(roomRef);
+          return snap.exists() ? v : null;
+        } catch (e) {
+          console.error("Error resolving single variation:", v, e);
+          return null;
+        }
+      })
+    );
+    
+    // Return the first that exists in DB, or the default trimmed lowercase variation if none
+    const matched = checks.find((v) => v !== null);
+    return matched || variations[0];
+  } catch (err) {
+    console.error("Error resolving variations in parallel:", err);
+    return variations[0];
+  }
 };
 
 export const checkRoomPassword = async (code: string, passwordEntered: string): Promise<boolean> => {
@@ -254,9 +282,10 @@ export const subscribeRoomLeaderboard = (
   maxResults = 50
 ) => {
   const path = 'leaderboard';
+  const roomVariations = getRoomCodeVariations(roomCode);
   const q = query(
     collection(db, path),
-    where('roomCode', '==', roomCode),
+    where('roomCode', 'in', roomVariations),
     limit(maxResults * 2)
   );
 
@@ -277,14 +306,16 @@ export const subscribeRoomLeaderboard = (
 
     callback(sorted);
   }, (error) => {
-    handleFirestoreError(error, OperationType.GET, path);
+    // Log asynchronously instead of interrupting with a hard throwing exception
+    console.error("error subscribing to leaderboard:", error);
   });
 };
 
 export const deleteAllScoresInRoom = async (roomCode: string) => {
   const path = 'leaderboard';
   try {
-    const q = query(collection(db, 'leaderboard'), where('roomCode', '==', roomCode));
+    const roomVariations = getRoomCodeVariations(roomCode);
+    const q = query(collection(db, 'leaderboard'), where('roomCode', 'in', roomVariations));
     const snap = await getDocs(q);
     const deletePromises = snap.docs.map(docSnapshot => deleteDoc(docSnapshot.ref));
     await Promise.all(deletePromises);

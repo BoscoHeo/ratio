@@ -32,7 +32,8 @@ import {
   Snowflake,
   Dices,
   Copy,
-  Trash2
+  Trash2,
+  Lock
 } from 'lucide-react';
 import { doc, onSnapshot } from 'firebase/firestore';
 import { 

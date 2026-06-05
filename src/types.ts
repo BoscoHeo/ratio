@@ -11,7 +11,7 @@ export interface Question {
 }
 
 export type GameMode = 'single' | 'group' | 'versus';
-export type Screen = 'main' | 'setup' | 'game' | 'result' | 'ranking' | 'setup-vs' | 'teacher' | 'teacher-dashboard' | 'student-lobby';
+export type Screen = 'main' | 'setup' | 'game' | 'result' | 'ranking' | 'setup-vs' | 'teacher' | 'teacher-dashboard' | 'student-lobby' | 'teacher-auth';
 
 export interface RPGStats {
   level: number;
