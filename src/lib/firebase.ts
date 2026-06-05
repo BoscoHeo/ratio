@@ -141,9 +141,19 @@ export const createRoom = async (code: string, teacher: string, password?: strin
     await setDoc(roomRef, {
       code,
       teacher,
-      password: password || '',
+      password: password || '1234',
       createdAt: serverTimestamp()
     });
+  } catch (error) {
+    handleFirestoreError(error, OperationType.WRITE, path);
+  }
+};
+
+export const updateRoomPassword = async (code: string, newPassword: string) => {
+  const path = `rooms/${code}`;
+  try {
+    const roomRef = doc(db, 'rooms', code);
+    await setDoc(roomRef, { password: newPassword }, { merge: true });
   } catch (error) {
     handleFirestoreError(error, OperationType.WRITE, path);
   }

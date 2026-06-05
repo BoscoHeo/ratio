@@ -47,6 +47,7 @@ import {
   saveScore, 
   getLeaderboard, 
   createRoom, 
+  updateRoomPassword,
   checkRoomExists,
   checkRoomPassword,
   syncPlayerProgress,
@@ -160,6 +161,8 @@ export default function App() {
   const [hasUploaded, setHasUploaded] = useState(false);
   const [roomPassword, setRoomPassword] = useState(''); // for room creation
   const [enteredRoomPassword, setEnteredRoomPassword] = useState(''); // for viewing existing room
+  const [showPasswordChange, setShowPasswordChange] = useState(false);
+  const [newRoomPassword, setNewRoomPassword] = useState('');
   
   // Dungeon specific state
   const [playerHp, setPlayerHp] = useState(100);
@@ -267,6 +270,8 @@ export default function App() {
     setEnteredPassword('');
     setRoomPassword('');
     setEnteredRoomPassword('');
+    setShowPasswordChange(false);
+    setNewRoomPassword('');
   }, []);
 
   const handleTeacherAuth = () => {
@@ -277,6 +282,24 @@ export default function App() {
       alert('비밀번호가 올바르지 않습니다.');
     }
   };
+
+  const handleUpdatePassword = useCallback(async () => {
+    if (!newRoomPassword.trim()) {
+      alert('새로운 비밀번호를 입력해주세요.');
+      return;
+    }
+    try {
+      setIsSaving(true);
+      await updateRoomPassword(roomToView, newRoomPassword);
+      alert(`방의 비밀번호가 성공적으로 변경되었습니다! 새 비밀번호: ${newRoomPassword}`);
+      setShowPasswordChange(false);
+      setNewRoomPassword('');
+    } catch (e) {
+      alert('비밀번호 변경 중 오류가 발생했습니다.');
+    } finally {
+      setIsSaving(false);
+    }
+  }, [newRoomPassword, roomToView]);
 
   const openRanking = async () => {
     setScreen('ranking');
@@ -1312,14 +1335,67 @@ export default function App() {
                     alert('방 코드가 클립보드에 복사되었습니다! 학생들에게 공유해주세요.');
                   }}>Active Heroes Tracking (Click to copy code)</div>
                 </div>
-                <button 
-                  onClick={viewRoomData} 
-                  disabled={isSaving}
-                  className={`p-3 bg-slate-800 rounded-xl hover:bg-slate-700 transition-all ${isSaving ? 'animate-spin opacity-50' : ''}`}
-                >
-                  <RefreshCcw size={18} />
-                </button>
+                <div className="flex gap-2">
+                  <button 
+                    onClick={() => {
+                      setShowPasswordChange(!showPasswordChange);
+                      setNewRoomPassword('');
+                    }}
+                    className={`p-3 rounded-xl transition-all ${showPasswordChange ? 'bg-purple-600 text-white shadow-lg shadow-purple-900/20' : 'bg-slate-800 hover:bg-slate-700 text-slate-300'}`}
+                    title="상황실 비밀번호 변경"
+                  >
+                    <Lock size={18} />
+                  </button>
+                  <button 
+                    onClick={viewRoomData} 
+                    disabled={isSaving}
+                    className={`p-3 bg-slate-800 rounded-xl hover:bg-slate-700 transition-all ${isSaving ? 'animate-spin opacity-50' : ''}`}
+                    title="새로고침"
+                  >
+                    <RefreshCcw size={18} />
+                  </button>
+                </div>
               </div>
+
+              {showPasswordChange && (
+                <motion.div 
+                  initial={{ opacity: 0, y: -10 }}
+                  animate={{ opacity: 1, y: 0 }}
+                  className="mb-6 p-4 bg-purple-950/40 border border-purple-500/30 rounded-xl space-y-3 shadow-[0_0_15px_rgba(147,51,234,0.05)] text-left"
+                >
+                  <div className="text-xs font-black text-purple-400 uppercase tracking-widest flex items-center gap-1.5">
+                    <Lock size={13} />
+                    상황실 비밀번호 변경
+                  </div>
+                  <p className="text-slate-400 text-[11px] leading-tight font-medium">이 던전 상황실({roomToView})에 입장할 때 사용할 새로운 비밀번호를 설정합니다.</p>
+                  <div className="flex gap-2">
+                    <input 
+                      type="password"
+                      placeholder="새 비밀번호 입력"
+                      value={newRoomPassword}
+                      onChange={(e) => setNewRoomPassword(e.target.value)}
+                      onKeyDown={(e) => {
+                        if (e.key === 'Enter') handleUpdatePassword();
+                      }}
+                      className="flex-1 bg-slate-900 p-2.5 rounded-lg border border-slate-700 text-white font-mono text-sm"
+                      autoFocus
+                    />
+                    <button 
+                      onClick={handleUpdatePassword}
+                      disabled={isSaving}
+                      className="btn-primary bg-purple-600 border-purple-700 px-4 text-xs font-bold uppercase py-2.5"
+                    >
+                      {isSaving ? '변경 중...' : '변경 완료'}
+                    </button>
+                    <button 
+                      onClick={() => setShowPasswordChange(false)}
+                      className="bg-slate-700 hover:bg-slate-650 border border-slate-600 text-slate-200 font-bold px-3 text-xs rounded-lg transition-all"
+                    >
+                      취소
+                    </button>
+                  </div>
+                </motion.div>
+              )}
 
               <div className="flex justify-between items-center mb-4 px-1">
                 <span className="text-xs font-bold text-slate-400">참여 영웅: <span className="text-purple-400 font-extrabold">{leaderboard.length}명</span></span>
