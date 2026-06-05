@@ -1,0 +1,8 @@
+{
+  "name": "Remix: 비와 비율 복습 게임",
+  "description": "An interactive math game for sixth graders to review ratios and proportions following the revised curriculum.",
+  "requestFramePermissions": [],
+  "majorCapabilities": [
+    "MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"
+  ]
+}

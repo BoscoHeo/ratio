@@ -1,0 +1,59 @@
+{
+  "entities": {
+    "Score": {
+      "title": "Score",
+      "description": "A leaderboard entry for the game.",
+      "type": "object",
+      "properties": {
+        "name": {
+          "type": "string",
+          "description": "The name of the user or group."
+        },
+        "score": {
+          "type": "number",
+          "description": "Total score achieved."
+        },
+        "level": {
+          "type": "number",
+          "description": "Level reached."
+        },
+        "mode": {
+          "type": "string",
+          "enum": ["single", "group", "versus"],
+          "description": "Game mode played."
+        },
+        "roomCode": {
+          "type": "string",
+          "description": "Optional room code for classroom tracking."
+        },
+        "timestamp": {
+          "type": "string",
+          "format": "date-time",
+          "description": "When the score was recorded."
+        }
+      },
+      "required": ["name", "score", "level", "mode", "timestamp"]
+    },
+    "Room": {
+      "title": "Room",
+      "description": "A classroom room created by a teacher.",
+      "type": "object",
+      "properties": {
+        "code": { "type": "string" },
+        "teacher": { "type": "string" },
+        "createdAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["code", "teacher", "createdAt"]
+    }
+  },
+  "firestore": {
+    "leaderboard": {
+      "schema": "Score",
+      "description": "Collection of game results."
+    },
+    "rooms": {
+      "schema": "Room",
+      "description": "Collection of active class rooms."
+    }
+  }
+}

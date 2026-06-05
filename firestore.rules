@@ -1,0 +1,46 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+    // Default deny
+    match /{document=**} {
+      allow read, write: if false;
+    }
+
+    // Helper functions
+    function isSignedIn() {
+      return request.auth != null;
+    }
+
+    function isValidId(id) {
+      return id is string && id.size() <= 128 && id.matches('^[a-zA-Z0-9_\\-]+$');
+    }
+
+    function incoming() {
+      return request.resource.data;
+    }
+
+    function isValidScore(data) {
+      return data.keys().hasAll(['name', 'score', 'level', 'mode', 'timestamp']) &&
+             data.name is string && data.name.size() <= 32 &&
+             data.score is number && data.score >= 0 &&
+             data.level is number && data.level >= 1 &&
+             data.mode in ['single', 'group', 'versus'] &&
+             data.timestamp is timestamp &&
+             (!data.keys().contains('roomCode') || data.roomCode is string);
+    }
+
+    // Leaderboard collection
+    match /leaderboard/{scoreId} {
+      allow list, get: if true;
+      allow create, update: if isValidScore(incoming()) && isValidId(scoreId);
+      allow delete: if false;
+    }
+
+    // Rooms collection
+    match /rooms/{roomCode} {
+      allow get: if true;
+      allow create, update: if (incoming().code == roomCode || request.resource.data.code == roomCode) && incoming().teacher is string;
+      allow list, delete: if false;
+    }
+  }
+}
