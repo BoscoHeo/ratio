@@ -31,7 +31,8 @@ import {
   Sparkles,
   Snowflake,
   Dices,
-  Copy
+  Copy,
+  Trash2
 } from 'lucide-react';
 import { 
   Question, 
@@ -47,7 +48,8 @@ import {
   createRoom, 
   checkRoomExists,
   syncPlayerProgress,
-  subscribeRoomLeaderboard
+  subscribeRoomLeaderboard,
+  deleteScore
 } from './lib/firebase';
 
 // Helper to shuffle array
@@ -84,7 +86,22 @@ const generateGradedQuestions = (pool: Question[], count = 10): Question[] => {
   for (let d = 1; d <= 5; d++) {
     const numToSelect = allocation[d - 1];
     const shuffledDiff = shuffle(byDiff[d]);
-    questions.push(...shuffledDiff.slice(0, numToSelect));
+    const selectedQuestions = shuffledDiff.slice(0, numToSelect);
+    
+    // Shuffle the options within each question to ensure randomized visual slots
+    const processed = selectedQuestions.map((originalQ) => {
+      const originalOptions = [...originalQ.o];
+      const correctAnswerText = originalOptions[originalQ.a];
+      const shuffledOptions = shuffle(originalOptions);
+      const newAnswerIdx = shuffledOptions.indexOf(correctAnswerText);
+      return {
+        ...originalQ,
+        o: shuffledOptions,
+        a: newAnswerIdx === -1 ? 0 : newAnswerIdx
+      };
+    });
+
+    questions.push(...processed);
   }
   
   return questions;
@@ -134,6 +151,7 @@ export default function App() {
   const [teacherName, setTeacherName] = useState('');
   const [roomToView, setRoomToView] = useState('');
   const [currentScoreId, setCurrentScoreId] = useState<string | null>(null);
+  const [deletingId, setDeletingId] = useState<string | null>(null);
   
   // Dungeon specific state
   const [playerHp, setPlayerHp] = useState(100);
@@ -214,7 +232,7 @@ export default function App() {
     setCurrentIndex(0);
     setSingleScore(0);
     setFeedback(null);
-    setName('');
+    // Keep name cached for seamless replay experiences
     setPlayerHp(100);
     setCurrentScoreId(null);
   }, []);
@@ -1006,11 +1024,65 @@ export default function App() {
               )}
 
               <div className="flex flex-col gap-3">
-                 <button 
+                {activeRoom ? (
+                  <>
+                    <button 
+                      onClick={() => {
+                        // Keep current name and enter student lobby directly with a fresh score identity
+                        setCurrentScoreId(generateId());
+                        setSingleScore(0);
+                        setPlayerScores([]);
+                        setCurrentIndex(0);
+                        setPlayerHp(100);
+                        setMonsterHp(100);
+                        setFeedback(null);
+                        setScreen('student-lobby');
+                      }}
+                      className="btn-primary w-full py-4 text-lg font-black uppercase tracking-widest bg-green-600 hover:bg-green-500 border-green-700 shadow-green-900/30 font-sans"
+                    >
+                      <RefreshCcw className="inline mr-2" size={20} />대기실로 복귀 (새로운 퀘스트 도전)
+                    </button>
+                    
+                    <button 
+                      onClick={() => {
+                        // Replay the current game mode with a fresh sequence
+                        setCurrentScoreId(generateId());
+                        if (mode === 'single') {
+                          startSingleMode();
+                        } else if (mode === 'group') {
+                          startGroupMode();
+                        } else {
+                          startVsMode();
+                        }
+                      }}
+                      className="btn-primary w-full py-4 text-lg font-black uppercase tracking-widest bg-brand hover:brightness-110 font-sans"
+                    >
+                      <Zap className="inline mr-2" size={20} />새로운 던전 즉시 공략하기
+                    </button>
+                  </>
+                ) : (
+                  <button 
+                    onClick={() => {
+                      setCurrentScoreId(generateId());
+                      if (mode === 'single') {
+                        startSingleMode();
+                      } else if (mode === 'group') {
+                        startGroupMode();
+                      } else {
+                        startVsMode();
+                      }
+                    }}
+                    className="btn-primary w-full py-4 text-lg font-black uppercase tracking-widest bg-brand hover:brightness-110 font-sans"
+                  >
+                    <RefreshCcw className="inline mr-2" size={20} />같은 이름으로 다시 도전하기
+                  </button>
+                )}
+
+                <button 
                   onClick={goMain}
-                  className="btn-primary w-full py-4 text-lg font-black uppercase tracking-widest"
+                  className="btn-secondary w-full py-4 text-lg font-black uppercase tracking-widest font-sans border-slate-700 text-slate-400 hover:text-white"
                 >
-                  <RefreshCcw className="inline mr-2" size={20} /> Re-enter Dungeon
+                  캠프(메인)로 돌아가기
                 </button>
               </div>
             </motion.div>
@@ -1149,13 +1221,57 @@ export default function App() {
                           </div>
                         </div>
                       </div>
-                      <div className="text-right">
-                        <div className="text-2xl font-black text-brand tracking-tighter">{entry.score} <span className="text-[10px] opacity-40">PTS</span></div>
-                        <div className="text-[9px] text-slate-600 uppercase font-bold mt-1">
-                          {entry.timestamp?.seconds 
-                            ? new Date(entry.timestamp.seconds * 1000).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' }) 
-                            : 'Just now'}
+                      <div className="flex items-center gap-3">
+                        <div className="text-right">
+                          <div className="text-2xl font-black text-brand tracking-tighter">{entry.score} <span className="text-[10px] opacity-40">PTS</span></div>
+                          <div className="text-[9px] text-slate-600 uppercase font-bold mt-1">
+                            {entry.timestamp?.seconds 
+                              ? new Date(entry.timestamp.seconds * 1000).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' }) 
+                              : 'Just now'}
+                          </div>
                         </div>
+
+                        {deletingId === entry.id ? (
+                          <div className="flex gap-1 items-center z-10 bg-slate-900/90 p-1.5 rounded-lg border border-red-500/30">
+                            <button 
+                              onClick={async (e) => {
+                                e.stopPropagation();
+                                if (entry.id) {
+                                  try {
+                                    await deleteScore(entry.id);
+                                    setLeaderboards(prev => prev.filter(item => item.id !== entry.id));
+                                    setDeletingId(null);
+                                  } catch (error) {
+                                    alert('삭제에 실패했습니다.');
+                                  }
+                                }
+                              }}
+                              className="bg-red-600 hover:bg-red-700 text-white text-[10px] font-bold px-2 py-1 rounded transition-colors"
+                            >
+                              삭제
+                            </button>
+                            <button 
+                              onClick={(e) => {
+                                e.stopPropagation();
+                                setDeletingId(null);
+                              }}
+                              className="bg-slate-700 hover:bg-slate-600 text-slate-200 text-[10px] font-bold px-2 py-1 rounded transition-colors"
+                            >
+                              취소
+                            </button>
+                          </div>
+                        ) : (
+                          <button 
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              setDeletingId(entry.id || null);
+                            }}
+                            className="p-2 text-slate-500 hover:text-red-400 hover:bg-red-500/10 rounded-lg transition-all"
+                            title="학생 데이터 삭제"
+                          >
+                            <Trash2 size={16} />
+                          </button>
+                        )}
                       </div>
                     </motion.div>
                   ))
@@ -1240,8 +1356,52 @@ export default function App() {
                              <div className="text-[10px] font-black text-brand uppercase tracking-widest">{getTitle(entry.level)} LV.{entry.level}</div>
                           </div>
                        </div>
-                       <div className="text-right">
-                          <div className="text-2xl font-black text-brand tracking-tighter">{entry.score} <span className="text-xs uppercase ml-1 opacity-60">Quest Points</span></div>
+                       <div className="flex items-center gap-3">
+                          <div className="text-right">
+                             <div className="text-2xl font-black text-brand tracking-tighter">{entry.score} <span className="text-xs uppercase ml-1 opacity-60">Quest Points</span></div>
+                          </div>
+
+                          {deletingId === entry.id ? (
+                            <div className="flex gap-1 items-center z-10 bg-slate-900/90 p-1.5 rounded-lg border border-red-500/30 font-sans">
+                              <button 
+                                onClick={async (e) => {
+                                  e.stopPropagation();
+                                  if (entry.id) {
+                                    try {
+                                      await deleteScore(entry.id);
+                                      setLeaderboards(prev => prev.filter(item => item.id !== entry.id));
+                                      setDeletingId(null);
+                                    } catch (error) {
+                                      alert('삭제에 실패했습니다.');
+                                    }
+                                  }
+                                }}
+                                className="bg-red-600 hover:bg-red-700 text-white text-[10px] font-bold px-2 py-1 rounded transition-colors font-sans"
+                              >
+                                삭제
+                              </button>
+                              <button 
+                                onClick={(e) => {
+                                  e.stopPropagation();
+                                  setDeletingId(null);
+                                }}
+                                className="bg-slate-700 hover:bg-slate-600 text-slate-200 text-[10px] font-bold px-2 py-1 rounded transition-colors font-sans"
+                              >
+                                취소
+                              </button>
+                            </div>
+                          ) : (
+                            <button 
+                              onClick={(e) => {
+                                e.stopPropagation();
+                                setDeletingId(entry.id || null);
+                              }}
+                              className="p-2 text-slate-500 hover:text-red-400 hover:bg-red-500/10 rounded-lg transition-all"
+                              title="기록 삭제"
+                            >
+                              <Trash2 size={16} />
+                            </button>
+                          )}
                        </div>
                     </motion.div>
                   ))

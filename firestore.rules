@@ -33,7 +33,7 @@ service cloud.firestore {
     match /leaderboard/{scoreId} {
       allow list, get: if true;
       allow create, update: if isValidScore(incoming()) && isValidId(scoreId);
-      allow delete: if false;
+      allow delete: if isValidId(scoreId);
     }
 
     // Rooms collection

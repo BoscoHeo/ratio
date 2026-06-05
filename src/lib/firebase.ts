@@ -12,7 +12,8 @@ import {
   setDoc,
   getDoc,
   where,
-  onSnapshot
+  onSnapshot,
+  deleteDoc
 } from 'firebase/firestore';
 import firebaseConfig from '../../firebase-applet-config.json';
 import { ScoreEntry, Room } from '../types';
@@ -80,6 +81,16 @@ export const saveScore = async (entry: Omit<ScoreEntry, 'id' | 'timestamp'>) => 
     await addDoc(collection(db, path), cleanData);
   } catch (error) {
     handleFirestoreError(error, OperationType.WRITE, path);
+  }
+};
+
+export const deleteScore = async (scoreId: string) => {
+  const path = `leaderboard/${scoreId}`;
+  try {
+    const docRef = doc(db, 'leaderboard', scoreId);
+    await deleteDoc(docRef);
+  } catch (error) {
+    handleFirestoreError(error, OperationType.DELETE, path);
   }
 };
 
