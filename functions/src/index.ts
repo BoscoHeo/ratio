@@ -109,6 +109,7 @@ function rateLimiter(limit: number, windowMs: number) {
 const app = express();
 
 const ALLOWED_ORIGINS = [
+  "https://ratio-bj5.pages.dev",
   "https://ratio.pages.dev",
   "http://localhost:3000",
   "http://localhost:5173",
