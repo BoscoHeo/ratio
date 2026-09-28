@@ -290,18 +290,21 @@ export default function App() {
       alert('새로운 비밀번호를 입력해주세요.');
       return;
     }
+    const currentPwd = roomPassword || enteredRoomPassword || '1234';
     try {
       setIsSaving(true);
-      await updateRoomPassword(roomToView, newRoomPassword);
+      await updateRoomPassword(roomToView, currentPwd, newRoomPassword);
       alert(`방의 비밀번호가 성공적으로 변경되었습니다! 새 비밀번호: ${newRoomPassword}`);
+      setRoomPassword(newRoomPassword);
+      setEnteredRoomPassword(newRoomPassword);
       setShowPasswordChange(false);
       setNewRoomPassword('');
-    } catch (e) {
-      alert('비밀번호 변경 중 오류가 발생했습니다.');
+    } catch (e: any) {
+      alert(`비밀번호 변경 실패: ${e?.message || '오류가 발생했습니다.'}`);
     } finally {
       setIsSaving(false);
     }
-  }, [newRoomPassword, roomToView]);
+  }, [newRoomPassword, roomToView, roomPassword, enteredRoomPassword]);
 
   const openRanking = async () => {
     setScreen('ranking');
@@ -1411,11 +1414,12 @@ export default function App() {
                       if (confirm('정말로 이 상황실의 모든 학생 데이터(기록)를 삭제하시겠습니까? 이 작업은 되돌릴 수 없으며, 모든 연결된 학생용 대시보드가 초기화됩니다.')) {
                         try {
                           setIsSaving(true);
-                          await deleteAllScoresInRoom(roomToView);
+                          const currentPwd = roomPassword || enteredRoomPassword || '1234';
+                          await deleteAllScoresInRoom(roomToView, currentPwd);
                           setLeaderboards([]);
                           alert('모든 학생 데이터가 초기화되었습니다.');
-                        } catch (error) {
-                          alert('전체 삭제에 실패했습니다.');
+                        } catch (error: any) {
+                          alert(`전체 삭제 실패: ${error?.message || '오류가 발생했습니다.'}`);
                         } finally {
                           setIsSaving(false);
                         }
@@ -1486,11 +1490,12 @@ export default function App() {
                                 e.stopPropagation();
                                 if (entry.id) {
                                   try {
-                                    await deleteScore(entry.id);
+                                    const currentPwd = roomPassword || enteredRoomPassword || '1234';
+                                    await deleteScore(entry.id, roomToView, currentPwd);
                                     setLeaderboards(prev => prev.filter(item => item.id !== entry.id));
                                     setDeletingId(null);
-                                  } catch (error) {
-                                    alert('삭제에 실패했습니다.');
+                                  } catch (error: any) {
+                                    alert(`삭제 실패: ${error?.message || '오류가 발생했습니다.'}`);
                                   }
                                 }
                               }}
@@ -1609,47 +1614,6 @@ export default function App() {
                              <div className="text-2xl font-black text-brand tracking-tighter">{entry.score} <span className="text-xs uppercase ml-1 opacity-60">Quest Points</span></div>
                           </div>
 
-                          {deletingId === entry.id ? (
-                            <div className="flex gap-1 items-center z-10 bg-slate-900/90 p-1.5 rounded-lg border border-red-500/30 font-sans">
-                              <button 
-                                onClick={async (e) => {
-                                  e.stopPropagation();
-                                  if (entry.id) {
-                                    try {
-                                      await deleteScore(entry.id);
-                                      setLeaderboards(prev => prev.filter(item => item.id !== entry.id));
-                                      setDeletingId(null);
-                                    } catch (error) {
-                                      alert('삭제에 실패했습니다.');
-                                    }
-                                  }
-                                }}
-                                className="bg-red-600 hover:bg-red-700 text-white text-[10px] font-bold px-2 py-1 rounded transition-colors font-sans"
-                              >
-                                삭제
-                              </button>
-                              <button 
-                                onClick={(e) => {
-                                  e.stopPropagation();
-                                  setDeletingId(null);
-                                }}
-                                className="bg-slate-700 hover:bg-slate-600 text-slate-200 text-[10px] font-bold px-2 py-1 rounded transition-colors font-sans"
-                              >
-                                취소
-                              </button>
-                            </div>
-                          ) : (
-                            <button 
-                              onClick={(e) => {
-                                e.stopPropagation();
-                                setDeletingId(entry.id || null);
-                              }}
-                              className="p-2 text-slate-500 hover:text-red-400 hover:bg-red-500/10 rounded-lg transition-all"
-                              title="기록 삭제"
-                            >
-                              <Trash2 size={16} />
-                            </button>
-                          )}
                        </div>
                     </motion.div>
                   ))

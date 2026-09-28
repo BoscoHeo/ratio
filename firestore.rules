@@ -6,43 +6,40 @@ service cloud.firestore {
       allow read, write: if false;
     }
 
-    // Helper functions
-    function isSignedIn() {
-      return request.auth != null;
+    function incoming() {
+      return request.resource.data;
     }
 
     function isValidId(id) {
-      return id is string && id.size() <= 128 && id.matches('^[a-zA-Z0-9_\\-]+$');
-    }
-
-    function incoming() {
-      return request.resource.data;
+      return id is string && id.size() > 0 && id.size() <= 64 && id.matches('^[a-zA-Z0-9_\\-]+$');
     }
 
     function isValidScore(data) {
       return data.keys().hasAll(['name', 'score', 'level', 'mode', 'timestamp']) &&
              data.name is string && data.name.size() <= 32 &&
-             data.score is number && data.score >= 0 &&
+             data.score is number && data.score >= 0 && data.score <= 100 &&
              data.level is number && data.level >= 1 &&
              data.mode in ['single', 'group', 'versus'] &&
              data.timestamp is timestamp &&
-             (!data.keys().contains('roomCode') || data.roomCode is string);
+             (!('roomCode' in data) || data.roomCode is string);
     }
 
     // Leaderboard collection
     match /leaderboard/{scoreId} {
       allow list, get: if true;
       allow create, update: if isValidScore(incoming()) && isValidId(scoreId);
-      allow delete: if isValidId(scoreId);
+      allow delete: if false;
     }
 
     // Rooms collection
     match /rooms/{roomCode} {
       allow get: if true;
-      allow create, update: if (incoming().code == roomCode || request.resource.data.code == roomCode) && 
-                              incoming().teacher is string &&
-                              (!incoming().keys().contains('password') || incoming().password is string);
-      allow list, delete: if false;
+      allow list, create, update, delete: if false;
+
+      // Isolated secret subcollection (Password hash storage)
+      match /secret/{document=**} {
+        allow read, write: if false;
+      }
     }
   }
 }
