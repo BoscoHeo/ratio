@@ -1,45 +1,43 @@
 rules_version = '2';
 service cloud.firestore {
   match /databases/{database}/documents {
-    // Default deny
-    match /{document=**} {
-      allow read, write: if false;
+    function signedIn() { return request.auth != null; }
+    function role() { return request.auth.token.role; }
+    function room() { return request.auth.token.roomCode; }
+    function validTeacher(code) {
+      return signedIn() && role() == 'teacher' && code != '' && room() == code
+        && request.auth.token.roomVersion == get(/databases/$(database)/documents/rooms/$(code)/secret/config).data.accessVersion;
     }
-
-    function incoming() {
-      return request.resource.data;
+    function canRead(data) {
+      return signedIn() && (validTeacher(data.roomCode)
+        || (role() == 'player' && data.ownerId == request.auth.uid && room() == data.roomCode));
     }
-
-    function isValidId(id) {
-      return id is string && id.size() > 0 && id.size() <= 64 && id.matches('^[a-zA-Z0-9_\\-]+$');
+    function validScore(data) {
+      return data.keys().hasAll(['name','score','level','mode','timestamp','roomCode','ownerId'])
+        && data.keys().hasOnly(['name','score','level','mode','timestamp','roomCode','ownerId'])
+        && data.name is string && data.name.size() > 0 && data.name.size() <= 32
+        && data.score is int && data.score >= 0 && data.score <= 100
+        && data.level is int && data.level >= 1 && data.level <= 100
+        && data.mode in ['single','group','versus']
+        && data.timestamp == request.time
+        && data.ownerId == request.auth.uid
+        && data.roomCode is string && data.roomCode.size() <= 32;
     }
-
-    function isValidScore(data) {
-      return data.keys().hasAll(['name', 'score', 'level', 'mode', 'timestamp']) &&
-             data.name is string && data.name.size() <= 32 &&
-             data.score is number && data.score >= 0 && data.score <= 100 &&
-             data.level is number && data.level >= 1 &&
-             data.mode in ['single', 'group', 'versus'] &&
-             data.timestamp is timestamp &&
-             (!('roomCode' in data) || data.roomCode is string);
-    }
-
-    // Leaderboard collection
-    match /leaderboard/{scoreId} {
-      allow list, get: if true;
-      allow create, update: if isValidScore(incoming()) && isValidId(scoreId);
+    match /leaderboard/{id} {
+      // 기존 기록은 해당 방 교사만 읽으며, 학생은 소유자가 없는 기존 기록을 인수할 수 없다.
+      allow read: if signedIn() && (validTeacher(resource.data.roomCode)
+        || (resource.data.keys().hasAll(['ownerId','roomCode']) && canRead(resource.data)));
+      allow create: if signedIn() && role() == 'player'
+        && validScore(request.resource.data) && room() == request.resource.data.roomCode;
+      allow update: if signedIn() && role() == 'player'
+        && resource.data.ownerId == request.auth.uid
+        && resource.data.roomCode == room()
+        && request.resource.data.ownerId == resource.data.ownerId
+        && request.resource.data.roomCode == resource.data.roomCode
+        && validScore(request.resource.data);
       allow delete: if false;
     }
-
-    // Rooms collection
-    match /rooms/{roomCode} {
-      allow get: if true;
-      allow list, create, update, delete: if false;
-
-      // Isolated secret subcollection (Password hash storage)
-      match /secret/{document=**} {
-        allow read, write: if false;
-      }
-    }
+    // 방 존재 확인과 교사 비밀번호 검증은 서버에서 처리한다.
+    match /{document=**} { allow read, write: if false; }
   }
 }

@@ -4,6 +4,7 @@ import { getFirestore, FieldValue, DocumentReference } from "firebase-admin/fire
 import express, { Request, Response, NextFunction } from "express";
 import cors from "cors";
 import crypto from "crypto";
+import { getAuth } from "firebase-admin/auth";
 
 // 1. Firebase Admin SDK 초기화 (Application Default Credentials 사용)
 const adminApp = getApps().length ? getApps()[0] : initializeApp();
@@ -87,7 +88,7 @@ const rateLimitMap = new Map<string, RateLimitRecord>();
 
 function rateLimiter(limit: number, windowMs: number) {
   return (req: Request, res: Response, next: NextFunction): void => {
-    const ip = req.ip || req.headers["x-forwarded-for"]?.toString() || "unknown";
+    const ip = req.path + ":" + (req.ip || "unknown");
     const now = Date.now();
     const record = rateLimitMap.get(ip);
 
@@ -106,7 +107,7 @@ function rateLimiter(limit: number, windowMs: number) {
 }
 
 // 5. Express 앱 구성
-const app = express();
+export const app = express();
 
 const ALLOWED_ORIGINS = [
   "https://ratio-bj5.pages.dev",
@@ -128,11 +129,72 @@ app.use(cors({
   credentials: true
 }));
 
-app.use(express.json());
+app.use(express.json({ limit: "16kb" }));
+
+
+async function teacherAccess(roomCode: string) {
+  const secret = db.collection("rooms").doc(roomCode).collection("secret").doc("config");
+  const roomVersion = await db.runTransaction(async tx => {
+    const snapshot = await tx.get(secret);
+    const existing = snapshot.data()?.accessVersion;
+    if (typeof existing === "string" && existing) return existing;
+    const version = crypto.randomUUID();
+    tx.set(secret, { accessVersion: version }, { merge: true });
+    return version;
+  });
+  return getAuth().createCustomToken("teacher_" + crypto.randomUUID(), {
+    role: "teacher", roomCode, roomVersion
+  });
+}
+
+async function findRoom(code: unknown): Promise<string | null> {
+  if (typeof code !== "string" || !code.trim() || code.length > 32) return null;
+  for (const variation of getRoomCodeVariations(code)) {
+    if ((await db.collection("rooms").doc(variation).get()).exists) return variation;
+  }
+  return null;
+}
+
+// 공개 응답에는 존재 여부와 정규화 코드만 넣고 비밀번호·교사 이름은 제외한다.
+app.post("/api/room/resolve", rateLimiter(120, 60000), async (req, res) => {
+  try {
+    const roomCode = await findRoom(req.body?.roomCode);
+    res.json({ exists: Boolean(roomCode), roomCode });
+  } catch {
+    res.status(500).json({ error: "학습방을 확인하지 못했습니다." });
+  }
+});
+
+// 방 코드를 알고 참여한 학생에게 그 방의 학생 권한만 발급한다.
+// 개인 모드는 자기 기록만 읽으며 전체 공개 순위표에는 참여하지 않는다.
+app.post("/api/session/join", rateLimiter(120, 60000), async (req, res) => {
+  try {
+    const requested = req.body?.roomCode;
+    if (requested !== undefined && (typeof requested !== "string" || requested.length > 32)) {
+      res.status(400).json({ error: "올바른 방 코드를 입력해주세요." }); return;
+    }
+    const roomCode = requested ? await findRoom(requested) : "";
+    if (requested && !roomCode) {
+      res.status(404).json({ error: "존재하지 않는 방입니다." }); return;
+    }
+    let uid = "player_" + crypto.randomUUID();
+    const bearer = req.headers.authorization;
+    if (bearer) {
+      if (!bearer.startsWith("Bearer ")) { res.status(401).json({ error: "다시 입장해주세요." }); return; }
+      try { uid = (await getAuth().verifyIdToken(bearer.slice(7))).uid; }
+      catch { res.status(401).json({ error: "입장 정보가 만료됐습니다. 다시 입장해주세요." }); return; }
+    }
+    const customToken = await getAuth().createCustomToken(uid, { role: "player", roomCode: roomCode || "" });
+    res.json({ customToken, roomCode: roomCode || "" });
+  } catch (error: any) {
+    console.error("Session token issuance failed", { code: error?.code, message: error?.message });
+    res.status(500).json({ error: "안전한 입장 정보를 만들지 못했습니다." });
+  }
+});
 
 // 교사 인증 및 점진적 해시 마이그레이션 공통 함수
 async function authenticateTeacher(roomCode: string, passwordEntered: string): Promise<{ success: boolean; resolvedCode?: string; error?: string }> {
-  if (!roomCode || typeof roomCode !== "string" || !passwordEntered || typeof passwordEntered !== "string") {
+  if (!roomCode || typeof roomCode !== "string" || roomCode.length > 32 || !passwordEntered || typeof passwordEntered !== "string" || passwordEntered.length > 64) {
     return { success: false, error: "방 코드와 비밀번호를 올바르게 입력해주세요." };
   }
 
@@ -210,11 +272,12 @@ app.post("/api/room/create", rateLimiter(20, 60000), async (req: Request, res: R
     }
 
     const cleanCode = roomCode.trim().toLowerCase().replace(/[/\\?#]/g, "");
+    if (!cleanCode) { res.status(400).json({ error: "올바른 방 코드를 입력해주세요." }); return; }
     const cleanTeacher = teacher.trim();
-    const rawPassword = (password && typeof password === "string" && password.trim()) ? password.trim() : "1234";
+    const rawPassword = typeof password === "string" ? password.trim() : "";
 
-    if (rawPassword.length > 64) {
-      res.status(400).json({ error: "비밀번호는 최대 64자까지 가능합니다." });
+    if (rawPassword.length < 8 || rawPassword.length > 64 || rawPassword === "12345678") {
+      res.status(400).json({ error: "새 방 비밀번호는 추측하기 어려운 8~64자로 정해주세요." });
       return;
     }
 
@@ -240,6 +303,7 @@ app.post("/api/room/create", rateLimiter(20, 60000), async (req: Request, res: R
       // Secret 서브컬렉션: passwordHash 격리 저장
       transaction.set(secretRef, {
         passwordHash,
+        accessVersion: crypto.randomUUID(),
         createdAt: FieldValue.serverTimestamp()
       });
     });
@@ -247,7 +311,8 @@ app.post("/api/room/create", rateLimiter(20, 60000), async (req: Request, res: R
     res.status(201).json({
       success: true,
       roomCode: cleanCode,
-      teacher: cleanTeacher
+      teacher: cleanTeacher,
+      customToken: await teacherAccess(cleanCode)
     });
   } catch (error: any) {
     if (error.message === "ROOM_ALREADY_EXISTS") {
@@ -274,7 +339,8 @@ app.post("/api/teacher/verify", rateLimiter(30, 60000), async (req: Request, res
 
     res.status(200).json({
       success: true,
-      resolvedCode: authResult.resolvedCode
+      resolvedCode: authResult.resolvedCode,
+      customToken: await teacherAccess(authResult.resolvedCode!)
     });
   } catch (error) {
     console.error("Teacher verify error:", error);
@@ -311,9 +377,7 @@ app.post("/api/teacher/delete-score", rateLimiter(60, 60000), async (req: Reques
     // 소속 검증: 삭제하려는 점수가 인증된 방 코드에 속해 있는지 확인
     const scoreData = scoreSnap.data();
     const scoreRoomCode = scoreData?.roomCode;
-    const allowedVariations = getRoomCodeVariations(authResult.resolvedCode);
-
-    if (!scoreRoomCode || !allowedVariations.includes(scoreRoomCode.trim().toLowerCase())) {
+    if (!scoreRoomCode || scoreRoomCode !== authResult.resolvedCode) {
       res.status(403).json({ error: "다른 방의 학생 기록은 삭제할 수 없습니다." });
       return;
     }
@@ -339,9 +403,8 @@ app.post("/api/teacher/clear-room", rateLimiter(15, 60000), async (req: Request,
       return;
     }
 
-    const allowedVariations = getRoomCodeVariations(authResult.resolvedCode);
     const snapshot = await db.collection("leaderboard")
-      .where("roomCode", "in", allowedVariations)
+      .where("roomCode", "==", authResult.resolvedCode)
       .get();
 
     if (snapshot.empty) {
@@ -379,8 +442,8 @@ app.post("/api/teacher/change-password", rateLimiter(15, 60000), async (req: Req
   try {
     const { roomCode, password, newPassword } = req.body;
 
-    if (!newPassword || typeof newPassword !== "string" || newPassword.trim().length === 0 || newPassword.trim().length > 64) {
-      res.status(400).json({ error: "새 비밀번호는 1~64자여야 합니다." });
+    if (!newPassword || typeof newPassword !== "string" || newPassword.trim().length < 8 || newPassword.trim().length > 64) {
+      res.status(400).json({ error: "새 비밀번호는 8~64자여야 합니다." });
       return;
     }
 
@@ -397,6 +460,7 @@ app.post("/api/teacher/change-password", rateLimiter(15, 60000), async (req: Req
     const batch = db.batch();
     batch.set(secretRef, {
       passwordHash: newHash,
+      accessVersion: crypto.randomUUID(),
       updatedAt: FieldValue.serverTimestamp()
     });
     // 혹시 root에 남아있는 레거시 평문 password 필드 제거
@@ -405,7 +469,7 @@ app.post("/api/teacher/change-password", rateLimiter(15, 60000), async (req: Req
     });
 
     await batch.commit();
-    res.status(200).json({ success: true });
+    res.status(200).json({ success: true, customToken: await teacherAccess(authResult.resolvedCode) });
   } catch (error) {
     console.error("Change password error:", error);
     res.status(500).json({ error: "비밀번호 변경 중 오류가 발생했습니다." });
