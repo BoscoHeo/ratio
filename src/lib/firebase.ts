@@ -1,16 +1,16 @@
 import { initializeApp } from 'firebase/app';
+import { getAuth, signInWithCustomToken, setPersistence, browserSessionPersistence, inMemoryPersistence, connectAuthEmulator } from 'firebase/auth';
 import {
   getFirestore,
+  connectFirestoreEmulator,
   collection,
   addDoc,
   getDocs,
   query,
-  orderBy,
   limit,
   serverTimestamp,
   doc,
   setDoc,
-  getDoc,
   where,
   onSnapshot
 } from 'firebase/firestore';
@@ -61,8 +61,14 @@ function handleFirestoreError(error: unknown, operationType: OperationType, path
   throw new Error(JSON.stringify(errInfo));
 }
 
-const app = initializeApp(firebaseConfig);
-export const db = getFirestore(app, firebaseConfig.firestoreDatabaseId);
+// 에뮬레이터는 명시적으로 요청한 로컬 개발 화면에서만 연결한다.
+const useEmulators = import.meta.env.VITE_USE_EMULATORS === 'true' && ['localhost', '127.0.0.1'].includes(location.hostname);
+const app = initializeApp(useEmulators ? { ...firebaseConfig, projectId: 'demo-ratio-security', apiKey: 'emulator-test-api-key' } : firebaseConfig);
+const auth = getAuth(app);
+if (useEmulators) connectAuthEmulator(auth, 'http://127.0.0.1:9197', { disableWarnings: true });
+const authReady = setPersistence(auth, browserSessionPersistence).catch(() => setPersistence(auth, inMemoryPersistence));
+export const db = useEmulators ? getFirestore(app) : getFirestore(app, firebaseConfig.firestoreDatabaseId);
+if (useEmulators) connectFirestoreEmulator(db, '127.0.0.1', 8187);
 
 // ----------------------------------------------------------------------
 // Cloud Functions 2nd Gen API URL 설정 (운영/개발 환경 지원)
@@ -70,19 +76,48 @@ export const db = getFirestore(app, firebaseConfig.firestoreDatabaseId);
 const DEFAULT_FUNCTIONS_URL = 'https://asia-northeast3-project-e9661680-15e4-4f40-b06.cloudfunctions.net/api';
 export const API_BASE = (import.meta as any).env?.VITE_FUNCTIONS_API_URL || DEFAULT_FUNCTIONS_URL;
 
+
+async function apiPost(route: string, body: unknown, authenticated = false) {
+  await authReady;
+  const headers: Record<string, string> = { 'Content-Type': 'application/json' };
+  if (authenticated && auth.currentUser) headers.Authorization = 'Bearer ' + await auth.currentUser.getIdToken();
+  const response = await fetch(API_BASE + route, { method: 'POST', headers, body: JSON.stringify(body) });
+  const data = await response.json().catch(() => ({}));
+  if (!response.ok) throw new Error(data.error || '요청을 완료하지 못했습니다.');
+  return data;
+}
+async function acceptAccess(data: { customToken?: string }) {
+  if (!data.customToken) throw new Error('서버 업데이트가 필요합니다. 다시 입장해주세요.');
+  await authReady;
+  await signInWithCustomToken(auth, data.customToken);
+}
+let accessQueue: Promise<unknown> = Promise.resolve();
+export async function joinStudentRoom(roomCode = '') {
+  const job = accessQueue.then(async () => {
+    await authReady;
+    const claims = auth.currentUser ? (await auth.currentUser.getIdTokenResult()).claims : {};
+    if (claims.role === 'player' && claims.roomCode === roomCode) return;
+    const data = await apiPost('/api/session/join', { roomCode }, true);
+    await acceptAccess(data);
+  });
+  accessQueue = job.catch(() => {});
+  return job;
+}
+async function requireTeacher(roomCode: string) {
+  await authReady;
+  const claims = auth.currentUser ? (await auth.currentUser.getIdTokenResult()).claims : {};
+  if (claims.role !== 'teacher' || claims.roomCode !== roomCode) throw new Error('해당 방의 교사 비밀번호로 다시 입장해주세요.');
+}
+async function scoreData(entry: Omit<ScoreEntry, 'id' | 'timestamp'>) {
+  await joinStudentRoom(entry.roomCode || '');
+  return { name: entry.name.trim(), score: entry.score, level: entry.level, mode: entry.mode,
+    timestamp: serverTimestamp(), ownerId: auth.currentUser!.uid, roomCode: entry.roomCode || '' };
+}
+
 export const saveScore = async (entry: Omit<ScoreEntry, 'id' | 'timestamp'>) => {
   const path = 'leaderboard';
   try {
-    const cleanData: any = {
-      name: entry.name,
-      score: entry.score,
-      level: entry.level,
-      mode: entry.mode,
-      timestamp: serverTimestamp()
-    };
-    if (entry.roomCode !== undefined && entry.roomCode !== null && entry.roomCode !== '') {
-      cleanData.roomCode = entry.roomCode;
-    }
+    const cleanData = await scoreData(entry);
     await addDoc(collection(db, path), cleanData);
   } catch (error) {
     handleFirestoreError(error, OperationType.WRITE, path);
@@ -93,29 +128,24 @@ export const getLeaderboard = async (gameMode: 'single' | 'group' | 'versus', ro
   const path = 'leaderboard';
   try {
     let q;
-    if (roomCode) {
-      const roomVariations = getRoomCodeVariations(roomCode);
-      q = query(
-        collection(db, path),
-        where('roomCode', 'in', roomVariations),
-        limit(maxResults * 2)
-      );
+    await authReady;
+    const scope = roomCode || '';
+    const claims = auth.currentUser ? (await auth.currentUser.getIdTokenResult()).claims : {};
+    if (scope && claims.role === 'teacher' && claims.roomCode === scope) {
+      await requireTeacher(scope);
+      q = query(collection(db, path), where('roomCode', '==', scope), limit(Math.min(maxResults, 100)));
     } else {
-      q = query(
-        collection(db, path),
-        where('mode', '==', gameMode),
-        orderBy('score', 'desc'),
-        limit(maxResults)
-      );
+      await joinStudentRoom(scope);
+      q = query(collection(db, path), where('ownerId', '==', auth.currentUser!.uid), where('roomCode', '==', scope), limit(Math.min(maxResults, 100)));
     }
-    
+
     const snapshot = await getDocs(q);
     const results = snapshot.docs.map(docSnapshot => {
       const data = docSnapshot.data() as any;
       return { id: docSnapshot.id, ...data } as ScoreEntry;
     });
 
-    if (roomCode) {
+    if (roomCode && claims.role === 'teacher') {
       return results.sort((a, b) => {
         const t1 = a.timestamp?.seconds || 0;
         const t2 = b.timestamp?.seconds || 0;
@@ -123,7 +153,7 @@ export const getLeaderboard = async (gameMode: 'single' | 'group' | 'versus', ro
       }).slice(0, maxResults);
     }
 
-    return results;
+    return results.filter(row => row.mode === gameMode).sort((a,b) => b.score-a.score);
   } catch (error) {
     handleFirestoreError(error, OperationType.GET, path);
     return [];
@@ -134,40 +164,12 @@ export const getLeaderboard = async (gameMode: 'single' | 'group' | 'versus', ro
 // 서버 API 연동: 방 생성 (Cloud Function API 호출)
 // ----------------------------------------------------------------------
 export const createRoom = async (code: string, teacher: string, password?: string) => {
-  const res = await fetch(`${API_BASE}/api/room/create`, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({
-      roomCode: code,
-      teacher,
-      password: password || '1234'
-    })
-  });
-
-  if (!res.ok) {
-    const data = await res.json().catch(() => ({}));
-    throw new Error(data.error || '방 생성에 실패했습니다.');
-  }
+  if (!password || password.trim().length < 8) throw new Error('새 방 비밀번호를 8자 이상 입력해주세요.');
+  await acceptAccess(await apiPost('/api/room/create', { roomCode: code, teacher, password }));
 };
 
-// ----------------------------------------------------------------------
-// 서버 API 연동: 비밀번호 변경 (Cloud Function API 호출)
-// ----------------------------------------------------------------------
 export const updateRoomPassword = async (code: string, oldPassword: string, newPassword: string) => {
-  const res = await fetch(`${API_BASE}/api/teacher/change-password`, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({
-      roomCode: code,
-      password: oldPassword,
-      newPassword
-    })
-  });
-
-  if (!res.ok) {
-    const data = await res.json().catch(() => ({}));
-    throw new Error(data.error || '비밀번호 변경에 실패했습니다.');
-  }
+  await acceptAccess(await apiPost('/api/teacher/change-password', { roomCode: code, password: oldPassword, newPassword }));
 };
 
 export const getRoomCodeVariations = (code: string): string[] => {
@@ -202,30 +204,8 @@ export const getRoomCodeVariations = (code: string): string[] => {
 };
 
 export const resolveRoomCode = async (enteredCode: string): Promise<string> => {
-  if (!enteredCode) return '';
-  const variations = getRoomCodeVariations(enteredCode);
-  if (variations.length === 0) return '';
-  
-  try {
-    const checks = await Promise.all(
-      variations.map(async (v) => {
-        try {
-          const roomRef = doc(db, 'rooms', v);
-          const snap = await getDoc(roomRef);
-          return snap.exists() ? v : null;
-        } catch (e) {
-          console.error("Error resolving single variation:", v, e);
-          return null;
-        }
-      })
-    );
-    
-    const matched = checks.find((v) => v !== null);
-    return matched || variations[0];
-  } catch (err) {
-    console.error("Error resolving variations in parallel:", err);
-    return variations[0];
-  }
+  const data = await apiPost('/api/room/resolve', { roomCode: enteredCode });
+  return data.roomCode || getRoomCodeVariations(enteredCode)[0] || '';
 };
 
 // ----------------------------------------------------------------------
@@ -233,31 +213,13 @@ export const resolveRoomCode = async (enteredCode: string): Promise<string> => {
 // ----------------------------------------------------------------------
 export const checkRoomPassword = async (code: string, passwordEntered: string): Promise<boolean> => {
   try {
-    const res = await fetch(`${API_BASE}/api/teacher/verify`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        roomCode: code,
-        password: passwordEntered
-      })
-    });
-    return res.status === 200;
-  } catch (error) {
-    console.error('Password verification failed:', error);
-    return false;
-  }
+    await acceptAccess(await apiPost('/api/teacher/verify', { roomCode: code, password: passwordEntered }));
+    return true;
+  } catch { return false; }
 };
 
 export const checkRoomExists = async (code: string): Promise<boolean> => {
-  const path = `rooms/${code}`;
-  try {
-    const roomRef = doc(db, 'rooms', code);
-    const snap = await getDoc(roomRef);
-    return snap.exists();
-  } catch (error) {
-    handleFirestoreError(error, OperationType.GET, path);
-    return false;
-  }
+  return Boolean((await apiPost('/api/room/resolve', { roomCode: code })).exists);
 };
 
 // ----------------------------------------------------------------------
@@ -270,16 +232,7 @@ export const syncPlayerProgress = async (
   const path = `leaderboard/${scoreId}`;
   try {
     const docRef = doc(db, 'leaderboard', scoreId);
-    const cleanData: any = {
-      name: entry.name,
-      score: entry.score,
-      level: entry.level,
-      mode: entry.mode,
-      timestamp: serverTimestamp()
-    };
-    if (entry.roomCode !== undefined && entry.roomCode !== null && entry.roomCode !== '') {
-      cleanData.roomCode = entry.roomCode;
-    }
+    const cleanData = await scoreData(entry);
     await setDoc(docRef, cleanData);
   } catch (error) {
     handleFirestoreError(error, OperationType.WRITE, path);
@@ -291,33 +244,16 @@ export const subscribeRoomLeaderboard = (
   callback: (entries: ScoreEntry[]) => void,
   maxResults = 50
 ) => {
-  const path = 'leaderboard';
-  const roomVariations = getRoomCodeVariations(roomCode);
-  const q = query(
-    collection(db, path),
-    where('roomCode', 'in', roomVariations),
-    limit(maxResults * 2)
-  );
-
-  return onSnapshot(q, (snapshot) => {
-    const results = snapshot.docs.map(docSnapshot => {
-      const data = docSnapshot.data() as any;
-      return { id: docSnapshot.id, ...data } as ScoreEntry;
-    });
-
-    const sorted = results.sort((a, b) => {
-      if (b.score !== a.score) {
-        return b.score - a.score;
-      }
-      const t1 = a.timestamp?.seconds || 0;
-      const t2 = b.timestamp?.seconds || 0;
-      return t2 - t1;
-    }).slice(0, maxResults);
-
-    callback(sorted);
-  }, (error) => {
-    console.error("error subscribing to leaderboard:", error);
-  });
+  let stopped = false;
+  let unsubscribe: (() => void) | undefined;
+  requireTeacher(roomCode).then(() => {
+    if (stopped) return;
+    const q = query(collection(db, 'leaderboard'), where('roomCode', '==', roomCode), limit(Math.min(maxResults, 100)));
+    unsubscribe = onSnapshot(q, snapshot => {
+      callback(snapshot.docs.map(d => ({ id: d.id, ...d.data() } as ScoreEntry)).sort((a,b) => b.score-a.score));
+    }, () => callback([]));
+  }).catch(() => callback([]));
+  return () => { stopped = true; unsubscribe?.(); };
 };
 
 // ----------------------------------------------------------------------

@@ -7,15 +7,14 @@
     "deploy": "firebase deploy --only functions"
   },
   "engines": {
-    "node": "20"
+    "node": "22"
   },
   "main": "lib/index.js",
   "dependencies": {
     "cors": "^2.8.5",
     "express": "^4.21.2",
     "firebase-admin": "^13.1.0",
-    "firebase-functions": "^6.3.2",
-    "react-example": "file:.."
+    "firebase-functions": "^6.3.2"
   },
   "devDependencies": {
     "@types/cors": "^2.8.17",

@@ -47,7 +47,8 @@ import { QUESTION_POOL } from './data/questions';
 import { 
   saveScore, 
   getLeaderboard, 
-  createRoom, 
+  createRoom,
+  joinStudentRoom,
   updateRoomPassword,
   checkRoomExists,
   checkRoomPassword,
@@ -159,7 +160,6 @@ export default function App() {
   const [roomToView, setRoomToView] = useState('');
   const [currentScoreId, setCurrentScoreId] = useState<string | null>(null);
   const [deletingId, setDeletingId] = useState<string | null>(null);
-  const [enteredPassword, setEnteredPassword] = useState('');
   const [hasUploaded, setHasUploaded] = useState(false);
   const [roomPassword, setRoomPassword] = useState(''); // for room creation
   const [enteredRoomPassword, setEnteredRoomPassword] = useState(''); // for viewing existing room
@@ -244,6 +244,10 @@ export default function App() {
         }
       }, (err) => {
         console.error("Error listening to score document:", err);
+        setActiveRoom(null);
+        setCurrentScoreId(null);
+        setHasUploaded(false);
+        setScreen('main');
       });
       return () => unsubscribe();
     }
@@ -269,32 +273,23 @@ export default function App() {
     setPlayerHp(100);
     setCurrentScoreId(null);
     setHasUploaded(false);
-    setEnteredPassword('');
     setRoomPassword('');
     setEnteredRoomPassword('');
     setShowPasswordChange(false);
     setNewRoomPassword('');
   }, []);
 
-  const handleTeacherAuth = () => {
-    if (enteredPassword === '1234') {
-      setScreen('teacher');
-      setEnteredPassword('');
-    } else {
-      alert('비밀번호가 올바르지 않습니다.');
-    }
-  };
 
   const handleUpdatePassword = useCallback(async () => {
     if (!newRoomPassword.trim()) {
       alert('새로운 비밀번호를 입력해주세요.');
       return;
     }
-    const currentPwd = roomPassword || enteredRoomPassword || '1234';
+    const currentPwd = roomPassword || enteredRoomPassword || '';
     try {
       setIsSaving(true);
       await updateRoomPassword(roomToView, currentPwd, newRoomPassword);
-      alert(`방의 비밀번호가 성공적으로 변경되었습니다! 새 비밀번호: ${newRoomPassword}`);
+      alert('방의 비밀번호가 변경되었습니다. 다른 기기의 교사는 새 비밀번호로 다시 입장해야 합니다.');
       setRoomPassword(newRoomPassword);
       setEnteredRoomPassword(newRoomPassword);
       setShowPasswordChange(false);
@@ -306,9 +301,9 @@ export default function App() {
     }
   }, [newRoomPassword, roomToView, roomPassword, enteredRoomPassword]);
 
-  const openRanking = async () => {
+  const openRanking = async (selectedMode: GameMode = mode) => {
     setScreen('ranking');
-    const data = await getLeaderboard(mode);
+    const data = await getLeaderboard(selectedMode, activeRoom || undefined);
     setLeaderboards(data);
   };
 
@@ -457,8 +452,8 @@ export default function App() {
   };
 
   const handleCreateRoom = useCallback(async () => {
-    if (!teacherRoomCode.trim() || !teacherName.trim()) {
-      alert('선생님 성함과 생성할 방 코드를 모두 입력해주세요.');
+    if (!teacherRoomCode.trim() || !teacherName.trim() || roomPassword.trim().length < 8) {
+      alert('선생님 이름, 방 코드와 8자 이상의 방 비밀번호를 입력해주세요.');
       return;
     }
     
@@ -502,6 +497,7 @@ export default function App() {
       const resolvedCode = await resolveRoomCode(studentRoomCode);
       const exists = await checkRoomExists(resolvedCode);
       if (exists) {
+        await joinStudentRoom(resolvedCode);
         setActiveRoom(resolvedCode);
         setRoomToView(resolvedCode);
         setScreen('student-lobby');
@@ -617,7 +613,7 @@ export default function App() {
                   <div className="text-xs font-medium opacity-70">실력 겨루기</div>
                 </button>
                 <button 
-                  onClick={() => setScreen('teacher-auth')}
+                  onClick={() => setScreen('teacher')}
                   className="btn-secondary bg-purple-600 border-purple-700 shadow-purple-900/20 group flex flex-col items-center gap-4 p-8 sm:col-span-1"
                 >
                   <GraduationCap size={32} />
@@ -677,10 +673,10 @@ export default function App() {
               </div>
 
               <button 
-                onClick={() => { setMode('single'); openRanking(); }}
+                onClick={() => { setMode('single'); openRanking('single'); }}
                 className="mt-8 text-slate-500 hover:text-white font-black flex items-center justify-center gap-2 transition-colors uppercase text-xs tracking-widest"
               >
-                <Medal size={16} /> Legendary Ranking
+                <Medal size={16} /> 내 기록
               </button>
             </motion.div>
           )}
@@ -717,7 +713,7 @@ export default function App() {
               </p>
 
               <div className="dungeon-panel border-green-500/30 mb-8 text-left">
-                  <label className="block text-[10px] font-black text-green-400 uppercase tracking-widest mb-3">실명 입력 (선생님이 확인할 수 있는 이름)</label>
+                  <label className="block text-[10px] font-black text-green-400 uppercase tracking-widest mb-3">별명 입력 (선생님이 구분할 수 있는 이름)</label>
                   <input 
                     value={playerName}
                     onChange={(e) => setName(e.target.value)}
@@ -1190,52 +1186,6 @@ export default function App() {
             </motion.div>
           )}
 
-          {screen === 'teacher-auth' && (
-            <motion.div
-              key="teacher-auth"
-              initial={{ opacity: 0, scale: 0.9 }}
-              animate={{ opacity: 1, scale: 1 }}
-              exit={{ opacity: 0, scale: 0.9 }}
-              className="card max-w-md mx-auto text-center"
-            >
-              <button onClick={goMain} className="mb-8 flex items-center gap-2 text-slate-400 hover:text-white transition-colors font-bold uppercase text-xs">
-                <ArrowLeft size={16} /> Back
-              </button>
-
-              <div className="w-16 h-16 bg-purple-600/10 text-purple-400 rounded-2xl flex items-center justify-center mx-auto mb-6 border-2 border-purple-500/30 shadow-[0_0_20px_rgba(147,51,234,0.1)]">
-                <GraduationCap size={32} />
-              </div>
-
-              <h2 className="text-3xl font-black text-white mb-2 tracking-tighter">교사 암호 확인</h2>
-              <p className="text-slate-400 text-sm font-bold mb-8">교사 스테이션에 진입하려면 암호가 필요합니다.</p>
-
-              <div className="dungeon-panel border-purple-500/30 mb-8 text-left">
-                <label className="block text-[10px] font-black text-purple-400 uppercase tracking-widest mb-3">비밀번호 입력</label>
-                <input 
-                  type="password"
-                  value={enteredPassword}
-                  onChange={(e) => setEnteredPassword(e.target.value)}
-                  onKeyDown={(e) => {
-                    if (e.key === 'Enter') handleTeacherAuth();
-                  }}
-                  placeholder="암호를 입력하세요..."
-                  className="w-full bg-slate-900 p-4 rounded-xl border-2 border-slate-700 outline-none focus:border-purple-500 transition-all text-lg font-mono text-center tracking-widest text-white placeholder-slate-600"
-                  autoFocus
-                />
-                <div className="text-[10px] text-slate-500 font-bold mt-2 text-center">
-                  * 초기 기본 암호는 <span className="text-purple-400 font-black font-mono">1234</span> 입니다.
-                </div>
-              </div>
-
-              <button 
-                onClick={handleTeacherAuth}
-                className="w-full btn-primary bg-purple-600 border-purple-700 py-4 text-lg font-black uppercase tracking-widest hover:brightness-110 active:scale-95 transition-all shadow-lg shadow-purple-900/20 font-sans"
-              >
-                인증 및 진입
-              </button>
-            </motion.div>
-          )}
-
           {screen === 'teacher' && (
             <motion.div 
               key="teacher" 
@@ -1267,7 +1217,7 @@ export default function App() {
                     />
                     <input 
                       type="password"
-                      placeholder="이 방의 진입 비밀번호 설정 (선택, 기본 1234)"
+                      placeholder="이 방의 관리 비밀번호 (필수, 8자 이상)"
                       value={roomPassword}
                       onChange={(e) => setRoomPassword(e.target.value)}
                       className="w-full bg-slate-900 p-3 rounded-lg border border-slate-700 text-white font-mono"
@@ -1414,7 +1364,7 @@ export default function App() {
                       if (confirm('정말로 이 상황실의 모든 학생 데이터(기록)를 삭제하시겠습니까? 이 작업은 되돌릴 수 없으며, 모든 연결된 학생용 대시보드가 초기화됩니다.')) {
                         try {
                           setIsSaving(true);
-                          const currentPwd = roomPassword || enteredRoomPassword || '1234';
+                          const currentPwd = roomPassword || enteredRoomPassword || '';
                           await deleteAllScoresInRoom(roomToView, currentPwd);
                           setLeaderboards([]);
                           alert('모든 학생 데이터가 초기화되었습니다.');
@@ -1490,7 +1440,7 @@ export default function App() {
                                 e.stopPropagation();
                                 if (entry.id) {
                                   try {
-                                    const currentPwd = roomPassword || enteredRoomPassword || '1234';
+                                    const currentPwd = roomPassword || enteredRoomPassword || '';
                                     await deleteScore(entry.id, roomToView, currentPwd);
                                     setLeaderboards(prev => prev.filter(item => item.id !== entry.id));
                                     setDeletingId(null);
@@ -1550,28 +1500,28 @@ export default function App() {
                  <button onClick={goMain} className="p-3 bg-slate-800 text-slate-400 hover:text-white rounded-xl transition-all">
                     <ArrowLeft size={18} />
                  </button>
-                 <h2 className="text-2xl font-black uppercase tracking-tighter text-white">명예의 전당 (Top Legends)</h2>
+                 <h2 className="text-2xl font-black uppercase tracking-tighter text-white">나의 학습 기록</h2>
                  <div className="w-10" />
               </div>
 
               <div className="flex gap-2 mb-6 p-1 bg-slate-800 rounded-2xl">
                  <button 
-                   onClick={() => { setMode('single'); openRanking(); }}
+                   onClick={() => { setMode('single'); openRanking('single'); }}
                    className={`flex-1 p-3 rounded-xl font-black text-xs transition-all uppercase tracking-widest ${mode === 'single' ? 'bg-brand text-white shadow-lg' : 'text-slate-500'}`}
                  >
-                   개인 랭킹
+                   개인 기록
                  </button>
                  <button 
-                   onClick={() => { setMode('group'); openRanking(); }}
+                   onClick={() => { setMode('group'); openRanking('group'); }}
                    className={`flex-1 p-3 rounded-xl font-black text-xs transition-all uppercase tracking-widest ${mode === 'group' ? 'bg-accent text-white shadow-lg' : 'text-slate-500'}`}
                  >
-                   연합 랭킹
+                   모둠 기록
                  </button>
                  <button 
-                   onClick={() => { setMode('versus'); openRanking(); }}
+                   onClick={() => { setMode('versus'); openRanking('versus'); }}
                    className={`flex-1 p-3 rounded-xl font-black text-xs transition-all uppercase tracking-widest ${mode === 'versus' ? 'bg-orange-500 text-white shadow-lg' : 'text-slate-500'}`}
                  >
-                   결투 랭킹
+                   대결 기록
                  </button>
               </div>
 
@@ -1579,7 +1529,7 @@ export default function App() {
                 {leaderboard.length === 0 ? (
                    <div className="text-center py-24 text-slate-600">
                       <Skull size={64} className="mx-auto mb-6 opacity-10" />
-                      <p className="font-black uppercase tracking-widest text-sm translate-y-4">No legends found yet...</p>
+                      <p className="font-black uppercase tracking-widest text-sm translate-y-4">아직 저장한 기록이 없습니다.</p>
                    </div>
                 ) : (
                   leaderboard.map((entry, idx) => (
